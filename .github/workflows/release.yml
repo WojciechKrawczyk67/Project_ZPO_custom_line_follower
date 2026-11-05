@@ -1,0 +1,28 @@
+name: Release Pipeline
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build_and_release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Pobranie kodu repozytorium
+        uses: actions/checkout@v4
+
+      - name: Symulacja pakowania programu
+        run: |
+          echo "Symulacja colcon build..."
+          mkdir -p install
+          echo "Tutaj beda skompilowane pliki ROS 2" > install/dummy_executable.txt
+          zip -r paczka_z_kodem.zip install/
+
+      - name: Utworzenie GitHub Release i podpiecie paczki
+        uses: softprops/action-gh-release@v2
+        with:
+          files: paczka_z_kodem.zip
