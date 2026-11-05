@@ -1,0 +1,23 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build_and_test:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Pobranie kodu repozytorium
+        uses: actions/checkout@v4
+
+      - name: Symulacja budowania (Build)
+        run: |
+          echo "Katalog zawiera nastepujace pliki:"
+          ls -la
+          echo "W przyszlosci tutaj znajdzie sie komenda: colcon build"
+
+      - name: Symulacja testow jednostkowych (Test)
+        run: |
+          echo "W przyszlosci tutaj znajdzie sie komenda: colcon test"
+          echo "Testy przebiegły pomyslnie!"
