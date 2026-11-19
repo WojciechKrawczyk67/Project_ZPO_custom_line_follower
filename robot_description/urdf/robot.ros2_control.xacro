@@ -1,0 +1,103 @@
+<?xml version="1.0"?>
+
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="robot">
+  <xacro:macro name="robot_ros2_control">
+
+  <xacro:arg name="use_mock_hardware" default="false"/>
+
+  <xacro:arg name="use_webots_hardware" default="false"/>
+
+  <xacro:arg name="use_gazebo_hardware" default="false"/>
+
+  <ros2_control name="RobotDriveSystem" type="system">
+    
+    <hardware>
+      <xacro:if value="$(arg use_mock_hardware)">
+        <plugin>mock_components/GenericSystem</plugin>
+        <param name="calculate_dynamics">true</param>
+      </xacro:if>
+      <xacro:if value="$(arg use_webots_hardware)">
+        <plugin>webots_ros2_control::Ros2ControlSystem</plugin>
+      </xacro:if>
+      <xacro:if value="$(arg use_gazebo_hardware)">
+        <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+      </xacro:if>
+    </hardware>
+
+    <joint name="steer_left_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+    <joint name="steer_right_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+
+    <joint name="fl_wheel_joint">
+      <command_interface name="velocity"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="fr_wheel_joint">
+      <command_interface name="velocity"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="bl_wheel_joint">
+      <command_interface name="velocity"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="br_wheel_joint">
+      <command_interface name="velocity"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+
+
+  <xacro:if value="$(arg use_webots_hardware)">
+    <webots>
+      <plugin type="webots_ros2_control::Ros2Control">
+      </plugin>
+      <device reference="line_camera_sensor" type="Camera">
+        <ros>
+          <topicName>/camera/image_raw</topicName>
+          <alwaysOn>true</alwaysOn>
+        </ros>
+      </device>
+    </webots>
+  </xacro:if>
+
+  <xacro:if value="$(arg use_gazebo_hardware)">
+    <gazebo>
+      <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+        <parameters>$(find robot_description)/config/controllers.yaml</parameters>
+      </plugin>
+    </gazebo>
+  </xacro:if>
+
+  <gazebo reference="fl_wheel_link">
+    <mu1>1.0</mu1>
+    <mu2>0.4</mu2>
+  </gazebo>
+
+  <gazebo reference="fr_wheel_link">
+    <mu1>1.0</mu1>
+    <mu2>0.4</mu2>
+  </gazebo>
+
+  <gazebo reference="bl_wheel_link">
+    <mu1>1.0</mu1>
+    <mu2>0.4</mu2>
+  </gazebo>
+
+  <gazebo reference="br_wheel_link">
+    <mu1>1.0</mu1>
+    <mu2>0.4</mu2>
+  </gazebo>
+
+  
+
+  </xacro:macro>
+</robot>
