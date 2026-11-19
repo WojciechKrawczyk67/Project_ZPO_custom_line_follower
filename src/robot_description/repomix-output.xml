@@ -1,0 +1,1252 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+config/
+  controllers.yaml
+launch/
+  display.launch.py
+  robot_webots.launch.py
+  webots_control.launch.py
+meshes/
+  back.STL
+  baza.STL
+  camera.STL
+  kolo.STL
+  skret.STL
+  stojak.STL
+rviz/
+  robot.rviz
+urdf/
+  robot.ros2_control.xacro
+  robot.urdf.xacro
+  wheels.xacro
+worlds/
+  robot_world.wbt
+CMakeLists.txt
+package.xml
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="config/controllers.yaml">
+controller_manager:
+  ros__parameters:
+    update_rate: 50
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    ackermann_controller:
+      type: ackermann_steering_controller/AckermannSteeringController
+
+ackermann_controller:
+  ros__parameters:
+    reference_timeout: 2.0
+    open_loop: false
+    position_feedback: false
+
+    traction_joints_names:
+      - br_wheel_joint
+      - bl_wheel_joint
+    steering_joints_names:
+      - steer_right_joint
+      - steer_left_joint
+
+    wheelbase: 0.36
+    steering_track_width: 0.26
+    traction_track_width: 0.26
+    traction_wheels_radius: 0.06
+</file>
+
+<file path="launch/display.launch.py">
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.substitutions import Command, PathJoinSubstitution
+from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
+
+def generate_launch_description():
+    
+
+    pkg_share = get_package_share_directory('robot_description')
+    
+    default_urdf_path = PathJoinSubstitution([pkg_share, 'urdf', 'robot.urdf.xacro'])
+    default_rviz_path = PathJoinSubstitution([pkg_share, 'rviz', 'robot.rviz'])
+
+
+    robot_description_content = ParameterValue(
+        Command(['xacro ', default_urdf_path]), 
+        value_type=str
+    )
+
+    robot_description = {'robot_description': robot_description_content}
+
+
+    robot_state_publisher_node = Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        output='screen',
+        parameters=[robot_description]
+    )
+
+    joint_state_publisher_gui_node = Node(
+        package='joint_state_publisher_gui',
+        executable='joint_state_publisher_gui',
+        output='screen'
+    )
+
+    rviz_node = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        output='screen',
+        arguments=['-d', default_rviz_path]
+    )
+
+    return LaunchDescription([
+        robot_state_publisher_node,
+        joint_state_publisher_gui_node,
+        rviz_node
+    ])
+</file>
+
+<file path="launch/robot_webots.launch.py">
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from ament_index_python.packages import get_package_share_directory
+from launch_ros.actions import Node
+
+
+def generate_launch_description():
+    pkg_description = get_package_share_directory('robot_description')
+
+    rviz_config_file = PathJoinSubstitution([
+        pkg_description,
+        'rviz',
+        'robot.rviz'
+    ])
+
+    webots_control_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([
+                pkg_description,
+                'launch',
+                'webots_control.launch.py'
+            ])
+        ),
+    )
+
+    rviz_node = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        output='screen',
+        arguments=['-d', rviz_config_file],
+        parameters=[{'use_sim_time': False}]
+    )
+
+    return LaunchDescription([
+        webots_control_launch,
+        rviz_node,
+    ])
+</file>
+
+<file path="launch/webots_control.launch.py">
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import xml.etree.ElementTree as ET
+import xacro
+from ament_index_python.packages import get_package_share_directory
+import launch
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, RegisterEventHandler
+from launch.event_handlers import OnProcessExit
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+from webots_ros2_driver.webots_launcher import WebotsLauncher
+from webots_ros2_driver.webots_controller import WebotsController
+from webots_ros2_driver.wait_for_controller_connection import WaitForControllerConnection
+
+
+def generate_proto_from_urdf(urdf_str, proto_output_path):
+    """Generate Webots PROTO on the fly from URDF.
+    
+    Removes virtual root links (base_footprint) so base_link becomes the root Solid
+    with inertia, bounding box and physics, allowing the robot to be dynamic.
+    """
+    root = ET.fromstring(urdf_str)
+
+    for link in list(root.findall('link')):
+        if link.get('name') == 'base_footprint':
+            root.remove(link)
+    for joint in list(root.findall('joint')):
+        if joint.get('name') == 'base_joint':
+            root.remove(joint)
+        elif (joint.find('child') is not None and joint.find('child').get('link') == 'base_link' and
+              joint.find('parent') is not None and joint.find('parent').get('link') == 'base_footprint'):
+            root.remove(joint)
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.urdf', delete=False) as f:
+        f.write(ET.tostring(root, encoding='unicode'))
+        tmp_clean_urdf = f.name
+
+    try:
+        subprocess.run([
+            sys.executable, '-m', 'urdf2webots.importer',
+            '--input', tmp_clean_urdf,
+            '--output', proto_output_path
+        ], capture_output=True, text=True, check=True)
+        print(f"[webots_control] Proto generated: {proto_output_path}")
+    except Exception as e:
+        print(f"[webots_control] Warning: urdf2webots generation failed: {e}")
+    finally:
+        if os.path.exists(tmp_clean_urdf):
+            os.remove(tmp_clean_urdf)
+
+
+def generate_launch_description():
+    # Ensure uniform temporary directory across Webots and ROS nodes
+    os.environ['WEBOTS_TMPDIR'] = '/tmp'
+    os.environ['TMPDIR'] = '/tmp'
+
+    pkg_description = get_package_share_directory('robot_description')
+
+    xacro_file = os.path.join(pkg_description, 'urdf', 'robot.urdf.xacro')
+    controller_config_file = os.path.join(pkg_description, 'config', 'controllers.yaml')
+    world_file = os.path.join(pkg_description, 'worlds', 'robot_world.wbt')
+    proto_file = os.path.join(pkg_description, 'worlds', 'Robot_line_follower.proto')
+
+    # Avoid ROS 2 Jazzy controller_manager bug where any argument containing
+    # the substring 'robot_description' is stripped, which breaks '--params-file'.
+    tmp_controller_config = '/tmp/controllers.yaml'
+    shutil.copyfile(controller_config_file, tmp_controller_config)
+
+    doc = xacro.process_file(xacro_file, mappings={'use_webots_hardware': 'true'})
+    urdf_str = doc.toxml()
+
+    # Automatically generate/update Webots PROTO on the fly from current XACRO
+    generate_proto_from_urdf(urdf_str, proto_file)
+
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.urdf') as tmp_urdf:
+        tmp_urdf.write(urdf_str)
+        tmp_urdf_path = tmp_urdf.name
+
+    webots = WebotsLauncher(
+        world=world_file,
+        ros2_supervisor=False,
+        mode='realtime',
+        gui = True,
+    )
+
+    robot_state_pub_node = Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        output='screen',
+        parameters=[{
+            'robot_description': urdf_str,
+            'use_sim_time': False
+        }]
+    )
+
+    webots_driver = WebotsController(
+        robot_name='robot',
+        parameters=[
+            {
+                'robot_description': tmp_urdf_path,
+                'use_sim_time': False,
+                'set_robot_state_publisher': False
+            },
+            tmp_controller_config,
+        ],
+        respawn=True
+    )
+
+    controller_manager_timeout = ['--controller-manager-timeout', '100']
+
+    joint_state_broadcaster_spawner = Node(
+        package='controller_manager',
+        executable='spawner',
+        output='screen',
+        arguments=['joint_state_broadcaster', '--param-file', tmp_controller_config] + controller_manager_timeout,
+    )
+
+    ackermann_controller_spawner = Node(
+        package='controller_manager',
+        executable='spawner',
+        output='screen',
+        arguments=['ackermann_controller', '--param-file', tmp_controller_config] + controller_manager_timeout,
+    )
+
+    waiting_nodes = WaitForControllerConnection(
+        target_driver=webots_driver,
+        nodes_to_start=[joint_state_broadcaster_spawner]
+    )
+
+    delay_ackermann = RegisterEventHandler(
+        event_handler=OnProcessExit(
+            target_action=joint_state_broadcaster_spawner,
+            on_exit=[ackermann_controller_spawner]
+        )
+    )
+
+    shutdown_on_webots_exit = RegisterEventHandler(
+        event_handler=OnProcessExit(
+            target_action=webots,
+            on_exit=[
+                launch.actions.EmitEvent(event=launch.events.Shutdown())
+            ],
+        )
+    )
+
+    return LaunchDescription([
+        webots,
+        robot_state_pub_node,
+        webots_driver,
+        waiting_nodes,
+        delay_ackermann,
+        shutdown_on_webots_exit,
+    ])
+</file>
+
+<file path="rviz/robot.rviz">
+Panels:
+  - Class: rviz_common/Displays
+    Help Height: 78
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /Status1
+        - /RobotModel1
+        - /TF1
+      Splitter Ratio: 0.5
+    Tree Height: 542
+  - Class: rviz_common/Selection
+    Name: Selection
+  - Class: rviz_common/Tool Properties
+    Expanded:
+      - /2D Goal Pose1
+      - /Publish Point1
+    Name: Tool Properties
+    Splitter Ratio: 0.5886790156364441
+  - Class: rviz_common/Views
+    Expanded:
+      - /Current View1
+    Name: Views
+    Splitter Ratio: 0.5
+  - Class: rviz_common/Time
+    Experimental: false
+    Name: Time
+    SyncMode: 0
+    SyncSource: ""
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.5
+      Cell Size: 1
+      Class: rviz_default_plugins/Grid
+      Color: 160; 160; 164
+      Enabled: true
+      Line Style:
+        Line Width: 0.029999999329447746
+        Value: Lines
+      Name: Grid
+      Normal Cell Count: 0
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Plane: XY
+      Plane Cell Count: 10
+      Reference Frame: <Fixed Frame>
+      Value: true
+    - Alpha: 1
+      Class: rviz_default_plugins/RobotModel
+      Collision Enabled: false
+      Description File: ""
+      Description Source: Topic
+      Description Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /robot_description
+      Enabled: true
+      Links:
+        All Links Enabled: true
+        Expand Joint Details: false
+        Expand Link Details: false
+        Expand Tree: false
+        Link Tree Style: Links in Alphabetic Order
+        back_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        base_footprint:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        base_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        bl_wheel_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        br_wheel_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        camera_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        fl_wheel_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        fr_wheel_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        steer_left_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        steer_right_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        stojak_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+      Mass Properties:
+        Inertia: false
+        Mass: false
+      Name: RobotModel
+      TF Prefix: ""
+      Update Interval: 0
+      Value: true
+      Visual Enabled: true
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Filter (blacklist): ""
+      Filter (whitelist): ""
+      Frame Timeout: 15
+      Frames:
+        All Enabled: true
+        back_link:
+          Value: true
+        base_footprint:
+          Value: true
+        base_link:
+          Value: true
+        bl_wheel_link:
+          Value: true
+        br_wheel_link:
+          Value: true
+        camera_link:
+          Value: true
+        fl_wheel_link:
+          Value: true
+        fr_wheel_link:
+          Value: true
+        steer_left_link:
+          Value: true
+        steer_right_link:
+          Value: true
+        stojak_link:
+          Value: true
+      Marker Scale: 0.5
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: false
+      Tree:
+        base_footprint:
+          base_link:
+            back_link:
+              {}
+            bl_wheel_link:
+              {}
+            br_wheel_link:
+              {}
+            camera_link:
+              {}
+            steer_left_link:
+              fl_wheel_link:
+                {}
+            steer_right_link:
+              fr_wheel_link:
+                {}
+            stojak_link:
+              {}
+      Update Interval: 0
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: base_footprint
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+      Hide Inactive Objects: true
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
+    - Class: rviz_default_plugins/SetInitialPose
+      Covariance x: 0.25
+      Covariance y: 0.25
+      Covariance yaw: 0.06853891909122467
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /initialpose
+    - Class: rviz_default_plugins/SetGoal
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /goal_pose
+    - Class: rviz_default_plugins/PublishPoint
+      Single click: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /clicked_point
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 0.9961740970611572
+      Enable Stereo Rendering:
+        Stereo Eye Separation: 0.05999999865889549
+        Stereo Focal Distance: 1
+        Swap Stereo Eyes: false
+        Value: false
+      Focal Point:
+        X: 0.09348047524690628
+        Y: -0.11373625695705414
+        Z: 0.12090082466602325
+      Focal Shape Fixed Size: false
+      Focal Shape Size: 0.05000000074505806
+      Invert Z Axis: false
+      Name: Current View
+      Near Clip Distance: 0.009999999776482582
+      Pitch: 0.13539886474609375
+      Target Frame: <Fixed Frame>
+      Value: Orbit (rviz_default_plugins)
+      Yaw: 2.480419158935547
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 846
+  Hide Left Dock: false
+  Hide Right Dock: false
+  QMainWindow State: 000000ff00000000fd000000040000000000000186000002acfc0200000008fb0000001200530065006c0065006300740069006f006e00000001e10000009b0000005d00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed0000043800000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb000000100044006900730070006c006100790073010000003f000002ac000000cc00fffffffb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261000000010000010f000002acfc0200000003fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000000a00560069006500770073010000003f000002ac000000a900fffffffb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e100000197000000030000052a0000003efc0100000002fb0000000800540069006d006501000000000000052a0000026f00fffffffb0000000800540069006d0065010000000000000450000000000000000000000289000002ac00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  Selection:
+    collapsed: false
+  Time:
+    collapsed: false
+  Tool Properties:
+    collapsed: false
+  Views:
+    collapsed: false
+  Width: 1322
+  X: 2734
+  Y: 67
+</file>
+
+<file path="urdf/robot.ros2_control.xacro">
+<?xml version="1.0"?>
+
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="robot">
+  <xacro:macro name="robot_ros2_control">
+
+  <xacro:arg name="use_mock_hardware" default="false"/>
+
+  <xacro:arg name="use_webots_hardware" default="false"/>
+
+  <xacro:arg name="use_gazebo_hardware" default="false"/>
+
+  <ros2_control name="RobotDriveSystem" type="system">
+    
+    <hardware>
+      <xacro:if value="$(arg use_mock_hardware)">
+        <plugin>mock_components/GenericSystem</plugin>
+        <param name="calculate_dynamics">true</param>
+      </xacro:if>
+      <xacro:if value="$(arg use_webots_hardware)">
+        <plugin>webots_ros2_control::Ros2ControlSystem</plugin>
+      </xacro:if>
+      <xacro:if value="$(arg use_gazebo_hardware)">
+        <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+      </xacro:if>
+    </hardware>
+
+    <joint name="steer_left_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+    <joint name="steer_right_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+
+    <joint name="fl_wheel_joint">
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="fr_wheel_joint">
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="bl_wheel_joint">
+      <command_interface name="velocity"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="br_wheel_joint">
+      <command_interface name="velocity"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+
+
+  <xacro:if value="$(arg use_webots_hardware)">
+    <webots>
+      <plugin type="webots_ros2_control::Ros2Control">
+      </plugin>
+      <device reference="line_camera_sensor" type="Camera">
+        <ros>
+          <topicName>/camera/image_raw</topicName>
+          <alwaysOn>true</alwaysOn>
+        </ros>
+      </device>
+    </webots>
+  </xacro:if>
+
+  <xacro:if value="$(arg use_gazebo_hardware)">
+    <gazebo>
+      <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+        <parameters>$(find robot_description)/config/controllers.yaml</parameters>
+      </plugin>
+    </gazebo>
+  </xacro:if>
+
+  <gazebo reference="fl_wheel_link">
+    <mu1>1.0</mu1>
+    <mu2>0.4</mu2>
+  </gazebo>
+
+  <gazebo reference="fr_wheel_link">
+    <mu1>1.0</mu1>
+    <mu2>0.4</mu2>
+  </gazebo>
+
+  <gazebo reference="bl_wheel_link">
+    <mu1>1.0</mu1>
+    <mu2>0.4</mu2>
+  </gazebo>
+
+  <gazebo reference="br_wheel_link">
+    <mu1>1.0</mu1>
+    <mu2>0.4</mu2>
+  </gazebo>
+
+  
+
+  </xacro:macro>
+</robot>
+</file>
+
+<file path="urdf/robot.urdf.xacro">
+<?xml version="1.0"?>
+
+<robot name="robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:include filename="$(find robot_description)/urdf/wheels.xacro"/>
+  <xacro:include filename="$(find robot_description)/urdf/robot.ros2_control.xacro"/>
+
+  <material name="rover_white">
+    <color rgba="0.9 0.9 0.9 1.0"/>
+  </material>
+  <link name="base_footprint">
+  </link>
+
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 3.1416 1.57079632679"/>
+      <geometry>
+        <mesh filename="package://robot_description/meshes/baza.STL"/>
+      </geometry>
+      <material name="rover_white"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 3.1416 1.57079632679"/>
+      <geometry>
+        <mesh filename="package://robot_description/meshes/baza.STL"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0.03" rpy="0 3.1416 1.57079632679"/>
+      <mass value="4.38"/>
+      <inertia ixx="0.059" ixy="0" ixz="0" iyy="0.034" iyz="0" izz="0.09"/>
+    </inertial>
+  </link>
+
+
+  <joint name="base_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0.2" rpy="0 0 0"/>
+  </joint>
+
+  
+
+  <link name="back_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="${3*pi/2} ${pi} ${pi/2}"/>
+      <geometry>
+        <mesh filename="package://robot_description/meshes/back.STL"/>
+      </geometry>
+      <material name="rover_white"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="${3*pi/2} ${pi} ${pi/2}"/>
+      <geometry>
+        <mesh filename="package://robot_description/meshes/back.STL"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0.04 0" rpy="${3*pi/2} ${pi} ${pi/2}"/>
+      <mass value="7.1"/>
+      <inertia ixx="0.04" ixy="0" ixz="0" iyy="0.05" iyz="0" izz="0.06"/>
+    </inertial>
+  </link>
+
+
+  <joint name="back_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="back_link"/>
+    <origin xyz="-0.18 0 -0.14" rpy="0 0 0"/>
+  </joint>
+
+  <link name="stojak_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="${pi/2} ${pi} ${3*pi/2}"/>
+      <geometry>
+        <mesh filename="package://robot_description/meshes/stojak.STL"/>
+      </geometry>
+      <material name="rover_white"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="${pi/2} ${pi} ${3*pi/2}"/>
+      <geometry>
+        <mesh filename="package://robot_description/meshes/stojak.STL"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0.0 0" rpy="${pi/2} ${pi} ${3*pi/2}"/>
+      <mass value="0.06"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+
+  <joint name="stojak_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="stojak_link"/>
+    <origin xyz="0.19 0 0.02" rpy="0 0 0"/>
+  </joint>
+
+  <link name="camera_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 ${3*pi/4} 0"/>
+      <geometry>
+        <mesh filename="package://robot_description/meshes/camera.STL"/>
+      </geometry>
+      <material name="rover_white"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 ${3*pi/4} 0"/>
+      <geometry>
+        <mesh filename="package://robot_description/meshes/camera.STL"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0.0 0" rpy="0 ${3*pi/4} 0"/>
+      <mass value="0.01"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+
+  <joint name="camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_link"/>
+    <origin xyz="0.21354 0 0.02222" rpy="0 0 0"/>
+  </joint>
+
+  <link name="camera_optical_link"/>
+
+  <joint name="camera_optical_joint" type="fixed">
+    <parent link="camera_link"/>
+    <child link="camera_optical_link"/>
+    <origin xyz="0 0 0" rpy="${1*pi/4} ${pi} ${pi/2}"/>
+  </joint>
+
+  <gazebo reference="camera_optical_link">
+    <sensor type="camera" name="line_camera_sensor"> 
+      <always_on>true</always_on>
+      <update_rate>60.0</update_rate>
+      <camera>
+        <horizontal_fov>${0.4*pi}</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.01</near>
+          <far>2.0</far>
+        </clip>
+      </camera>
+    </sensor>
+  </gazebo>
+
+  <link name="steer_left_link">
+      <visual>
+        <origin xyz="0 0 0" rpy="${pi} 0 0"/>
+        <geometry>
+          <mesh filename="package://robot_description/meshes/skret.STL"/>
+        </geometry>
+        <material name="rover_white"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="${pi} 0 0"/>
+        <geometry>
+          <mesh filename="package://robot_description/meshes/skret.STL"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <origin xyz="0 0 0.04" rpy="${pi} 0 0"/>
+        <mass value="0.95"/>
+        <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+      </inertial>
+  </link>
+
+  <joint name="steer_left_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="steer_left_link"/>
+    <origin xyz="0.18 0.13 -0.06" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/> 
+    <limit lower="-0.9" upper="0.9" effort="5.0" velocity="3.0"/>
+  </joint>
+
+  <link name="steer_right_link">
+      <visual>
+        <origin xyz="0 0 0" rpy="${pi} 0 0"/>
+        <geometry>
+          <mesh filename="package://robot_description/meshes/skret.STL"/>
+        </geometry>
+        <material name="rover_white"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="${pi} 0 0"/>
+        <geometry>
+          <mesh filename="package://robot_description/meshes/skret.STL"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <origin xyz="0 0 0.04" rpy="${pi} 0 0"/>
+        <mass value="0.95"/>
+        <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+      </inertial>
+  </link>
+
+  <joint name="steer_right_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="steer_right_link"/>
+    <origin xyz="0.18 -0.13 -0.06" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/> 
+    <limit lower="-0.9" upper="0.9" effort="5.0" velocity="3.0"/>
+  </joint>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+  <xacro:rover_wheel prefix="bl" parent_link="base_link">
+    <origin xyz="-0.18 0.162 -0.14" rpy="0 0 0"/>
+  </xacro:rover_wheel>
+  <xacro:rover_wheel prefix="br" parent_link="base_link">
+    <origin xyz="-0.18 -0.162 -0.14" rpy="0 0 0"/>
+  </xacro:rover_wheel>
+
+  <link name="fl_wheel_link">
+      <visual>
+        <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+        <geometry>
+          <mesh filename="package://robot_description/meshes/kolo.STL"/>
+        </geometry>
+        <material name="rover_white"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+        <geometry>
+          <cylinder radius="0.06" length="0.02"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+        <mass value="4.03"/>
+        <inertia ixx="0.004" ixy="0" ixz="0" iyy="0.004" iyz="0" izz="0.007"/>
+    </inertial>
+  </link>
+
+  <link name="fr_wheel_link">
+      <visual>
+        <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+        <geometry>
+          <mesh filename="package://robot_description/meshes/kolo.STL"/>
+        </geometry>
+        <material name="rover_white"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+        <geometry>
+          <cylinder radius="0.06" length="0.02"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+        <mass value="4.03"/>
+        <inertia ixx="0.004" ixy="0" ixz="0" iyy="0.004" iyz="0" izz="0.007"/>
+    </inertial>
+  </link>
+
+
+  <joint name="fr_wheel_joint" type="continuous">
+    <parent link="steer_right_link"/>
+    <child link="fr_wheel_link"/>
+    <origin xyz="0 -0.032 -0.08" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="0.0" velocity="10.0"/>
+    <dynamics damping="0.01" friction="0.01"/>
+  </joint>
+
+  <joint name="fl_wheel_joint" type="continuous">
+    <parent link="steer_left_link"/>
+    <child link="fl_wheel_link"/>
+    <origin xyz="0 0.032 -0.08" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="0.0" velocity="10.0"/>
+    <dynamics damping="0.01" friction="0.01"/>
+  </joint>
+
+  <xacro:robot_ros2_control/>
+
+  
+
+
+
+  
+</robot>
+</file>
+
+<file path="urdf/wheels.xacro">
+<?xml version="1.0"?>
+
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:macro name="rover_wheel" params="prefix parent_link *joint_origin_block">
+    
+    <link name="${prefix}_wheel_link">
+      <visual>
+        <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+        <geometry>
+          <mesh filename="package://robot_description/meshes/kolo.STL"/>
+        </geometry>
+        <material name="rover_white"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+        <geometry>
+          <cylinder radius="0.06" length="0.02"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+        <mass value="4.03"/>
+        <inertia ixx="0.004" ixy="0" ixz="0" iyy="0.004" iyz="0" izz="0.007"/>
+    </inertial>
+    </link>
+
+
+    <joint name="${prefix}_wheel_joint" type="continuous">
+      <parent link="${parent_link}"/>
+      <child link="${prefix}_wheel_link"/>
+      
+
+      <xacro:insert_block name="joint_origin_block"/>
+      
+
+      <axis xyz="0 1 0"/>
+
+      <limit effort="40000.0" velocity="10.0"/>
+      <dynamics damping="0.1" friction="0.5"/>
+    </joint>
+    
+  </xacro:macro>
+
+</robot>
+</file>
+
+<file path="worlds/robot_world.wbt">
+#VRML_SIM R2025a utf8
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/Floor.proto"
+EXTERNPROTO "Robot_line_follower.proto"
+
+WorldInfo {
+  basicTimeStep 10
+}
+Viewpoint {
+  orientation -0.2 0.9 0.1 1.1
+  position 1.9 1.6 1.7
+}
+TexturedBackground {}
+TexturedBackgroundLight {}
+Floor {
+  size 10 10
+}
+Solid {
+  translation 3 0.5 0
+  name "obstacle_1"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.8 0.2 0.2
+      }
+      geometry Box {
+        size 0.5 1 1
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.5 1 1
+  }
+  physics Physics {
+    density 0.1
+  }
+}
+Solid {
+  translation -2 0.5 1
+  name "obstacle_2"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.2 0.8 0.2
+      }
+      geometry Box {
+        size 1 1 1
+      }
+    }
+  ]
+  boundingObject Box {
+    size 1 1 1
+  }
+  physics Physics {
+    density 0.1
+  }
+}
+Solid {
+  translation 3 3 1
+  name "obstacle_3"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.2 0.2 0.8
+      }
+      geometry Cylinder {
+        height 1
+        radius 0.5
+      }
+    }
+  ]
+  boundingObject Cylinder {
+    height 1
+    radius 0.5
+  }
+  physics Physics {
+    density 0.1
+  }
+}
+Robot_line_follower {
+  translation 0 0 0.205
+  name "robot"
+  controller "<extern>"
+}
+</file>
+
+<file path="CMakeLists.txt">
+cmake_minimum_required(VERSION 3.8)
+project(robot_description)
+
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+# find dependencies
+find_package(ament_cmake REQUIRED)
+# uncomment the following section in order to fill in
+# further dependencies manually.
+# find_package(<dependency> REQUIRED)
+install(
+  DIRECTORY urdf meshes launch rviz worlds
+  DESTINATION share/${PROJECT_NAME}
+)
+
+install(
+  DIRECTORY config
+  DESTINATION share/${PROJECT_NAME}
+)
+if(BUILD_TESTING)
+  find_package(ament_lint_auto REQUIRED)
+  # the following line skips the linter which checks for copyrights
+  # comment the line when a copyright and license is added to all source files
+  set(ament_cmake_copyright_FOUND TRUE)
+  # the following line skips cpplint (only works in a git repo)
+  # comment the line when this package is in a git repo and when
+  # a copyright and license is added to all source files
+  set(ament_cmake_cpplint_FOUND TRUE)
+  ament_lint_auto_find_test_dependencies()
+endif()
+
+ament_package()
+</file>
+
+<file path="package.xml">
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>robot_description</name>
+  <version>0.0.0</version>
+  <description>TODO: Package description</description>
+  <maintainer email="wojtekkrawczy@gmail.com">wojciech</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>urdf</depend>
+  <depend>xacro</depend>
+  <depend>robot_state_publisher</depend>
+  <depend>joint_state_publisher</depend>
+  <depend>joint_state_publisher_gui</depend>
+  <depend>rviz2</depend>
+  <exec_depend>controller_manager</exec_depend>
+  <exec_depend>ros2controlcli</exec_depend>
+  <exec_depend>hardware_interface</exec_depend>
+  <exec_depend>joint_state_broadcaster</exec_depend>
+
+  <exec_depend>mock_components</exec_depend>
+  <exec_depend>gz_ros2_control</exec_depend>
+  <exec_depend>webots_ros2_driver</exec_depend>
+  <exec_depend>webots_ros2_control</exec_depend>
+
+  <exec_depend>ackermann_steering_controller</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
+</file>
+
+</files>

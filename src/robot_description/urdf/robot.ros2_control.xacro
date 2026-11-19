@@ -34,12 +34,10 @@
     </joint>
 
     <joint name="fl_wheel_joint">
-      <command_interface name="velocity"/>
       <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
     <joint name="fr_wheel_joint">
-      <command_interface name="velocity"/>
       <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>

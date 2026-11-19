@@ -36,6 +36,16 @@ Solid {
     density 0.1
   }
 }
+WorldInfo {
+  basicTimeStep 10
+  contactProperties [
+    ContactProperties {
+      coulombFriction [ 2.0 ]
+      softCFM 0.0001
+      softERP 0.2
+    }
+  ]
+}
 Solid {
   translation -2 0.5 1
   name "obstacle_2"
